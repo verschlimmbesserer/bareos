@@ -1,0 +1,118 @@
+---
+- name: Register client {{ item.name }}
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      echo "configure add client " "name={{ item.name }} " "address={{ item.address }} " "password={{ item.password }}" | bconsole
+  args:
+    creates: "/etc/bareos/bareos-dir.d/client/{{ item.name }}.conf"
+  register: _bconsole_output
+  notify: reload bareos server
+
+- name: Generate md5sum from password
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      echo -n {{ item.password }} | md5sum | awk '{print $1}'
+    executable: /bin/bash
+  register: _bareos_md5
+  changed_when: false
+
+- name: Make password md5 more civilized variable
+  ansible.builtin.set_fact:
+    bareos_client_password_md5: "{{ _bareos_md5.stdout }}"
+
+- name: Make sure director's IP is defined on {{ item.name }}
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: "^{{ item.director_ip | default(bareos_director.ip) }}"
+    line: "{{ item.director_ip | default(bareos_director.ip) }} {{ item.director_name | default(bareos_director.name) }}"
+  when:
+    - item.director_ip is defined or director.ip is defined
+    - item.director_name is defined or director.name is defined
+  delegate_to: "{{ item.ansible_delegate_hostname | default(item.name) }}"
+
+- name: Generate director config on {{ item.name }}
+  ansible.builtin.template:
+    src: bareos-dir.conf.j2
+    dest: /etc/bareos/bareos-fd.d/director/bareos-dir.conf
+    mode: "0640"
+  delegate_to: "{{ item.ansible_delegate_hostname | default(item.name) }}"
+  register: _bareos_director_config
+
+- name: Generate client self config on {{ item.name }}
+  ansible.builtin.template:
+    src: myself.conf.j2
+    dest: /etc/bareos/bareos-fd.d/client/myself.conf
+    mode: "0640"
+    owner: bareos
+    group: bareos
+  delegate_to: "{{ item.ansible_delegate_hostname | default(item.name) }}"
+  register: _bareos_client_config
+
+- name: Restart bareos client on {{ item.name }}
+  ansible.builtin.systemd:
+    name: bareos-fd
+    state: restarted
+  when:
+    - _bareos_director_config.changed or _bareos_client_config.changed
+  delegate_to: "{{ item.ansible_delegate_hostname | default(item.name) }}"
+
+- name: Wait for fd to start on {{ item.name }}
+  ansible.builtin.wait_for:
+    port: 9102
+    host: 127.0.0.1
+    delay: 5
+    sleep: 5
+    timeout: 60
+  delegate_to: "{{ item.ansible_delegate_hostname | default(item.name) }}"
+
+- name: Check client status for {{ item.name }}
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      echo "status client={{ item.name }}" | bconsole
+    executable: /bin/bash
+  register: _bconsole_output
+  failed_when:
+    (
+      'Error' in _bconsole_output.stdout
+      and not 'Errors=0' in _bconsole_output.stdout
+      and not 'G  Error' in _bconsole_output.stdout
+    ) or
+    ( 'Failed' in _bconsole_output.stdout )
+  changed_when: false
+
+- name: Add backup job
+  ansible.builtin.template:
+    src: backup-job.conf.j2
+    dest: "/etc/bareos/bareos-dir.d/job/backup-{{ item.name }}.conf"
+    mode: "0640"
+    owner: bareos
+    group: bareos
+  when: item.enable_backup_job | default(true)
+  register: _bareos_backup_job
+  notify: reload bareos server
+
+- name: Flush handlers, to make sure bareos is reloaded
+  ansible.builtin.meta: flush_handlers
+
+- name: Start first backup
+  ansible.builtin.shell:
+    cmd: >
+      set -o pipefail
+      echo "run job=backup-{{ item.name }} client={{ item.name }} yes" | bconsole
+    executable: /bin/bash
+  register: _bconsole_output
+  failed_when: ('Error' in _bconsole_output.stdout) or ('Failed' in _bconsole_output.stdout) or ('not found' in _bconsole_output.stdout)
+  changed_when: _bconsole_output.rc != 0
+  when:
+    - item.autostart | default(true)
+    - _bareos_backup_job.changed
+
+- name: Update client address if changed
+  ansible.builtin.lineinfile:
+    path: /etc/bareos/bareos-dir.d/client/{{ item.name }}.conf
+    regexp: '^  Address = '
+    line: '  Address = {{ item.address }}'
+  notify: reload bareos server

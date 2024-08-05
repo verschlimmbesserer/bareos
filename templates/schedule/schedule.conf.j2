@@ -1,0 +1,16 @@
+# {{ ansible_managed }}
+Schedule {
+{% for opt, val in item.value.items() %}
+{% if val | type_debug != "list" %}
+   {{ opt }} = {{ val }}
+{% else %}
+{% for item in val %}
+{% if item | type_debug == "bool" %}
+   {{ opt }} = {{ item | ternary('yes', 'no')}}
+{% else %}
+   {{ opt }} = {{ item }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+}

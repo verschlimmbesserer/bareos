@@ -1,0 +1,12 @@
+---
+- name: Unregister client {{ item.name }}
+  ansible.builtin.file:
+    path: "/etc/bareos/bareos-dir.d/client/{{ item.name }}.conf"
+    state: absent
+  notify: Reload bareos server
+
+- name: Cleanup client backup job for {{ item.name }}
+  ansible.builtin.file:
+    path: "/etc/bareos/bareos-dir.d/job/backup-{{ item.name }}.conf"
+    state: absent
+  notify: Reload bareos server

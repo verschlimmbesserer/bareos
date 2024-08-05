@@ -1,0 +1,15 @@
+---
+
+- name: Reload bareos server
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      echo "reload" | bconsole
+    executable: /bin/bash
+  register: bareos_reload
+  changed_when: bareos_reload.rc != 0
+
+- name: Restart apache
+  ansible.builtin.service:
+    name: apache2
+    state: restarted

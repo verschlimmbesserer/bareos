@@ -1,0 +1,59 @@
+---
+- name: Include OS-specific variables
+  ansible.builtin.include_vars: "{{ item }}"
+  with_first_found:
+    - "{{ ansible_distribution }}{{ ansible_distribution_major_version }}.yml"
+    - "{{ ansible_distribution }}.yml"
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install dependencies
+  ansible.builtin.apt:
+    name: "{{ _bareos_support_packages }}"
+
+- name: Install gpg-agent on new distros
+  ansible.builtin.apt:
+    name: gpg-agent
+  when: ansible_distribution == 'Debian' and ansible_distribution_major_version is version('11','>=')
+
+- name: Add BareOS apt-key
+  ansible.builtin.apt_key:
+    url: "http://download.bareos.org/bareos/release/{{ bareos_release }}/{{ bareos_os_version }}/Release.key"
+
+- name: Ensure BareOS APT repo is present
+  ansible.builtin.apt_repository:
+    repo: "deb http://download.bareos.org/bareos/release/{{ bareos_release }}/{{ bareos_os_version }}/ /"
+    filename: bareos
+
+- name: Install && setup bareos client
+  ansible.builtin.include_tasks: bareos_client.yml
+  when: bareos_install_client
+
+- name: Install bareos-server
+  ansible.builtin.include_tasks: bareos_server.yml
+  when: bareos_install_server
+
+# ToDo "check why run on server?"
+
+- name: Register clients
+  ansible.builtin.include_tasks: register_client.yml
+  with_items: "{{ bareos_clients }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - bareos_install_server
+    - item.ansible_delegate_hostname|default(item.name) in ansible_play_hosts
+    - item.state | default('present') == 'present'
+
+- name: Deregister clients
+  ansible.builtin.include_tasks: deregister_client.yml
+  with_items: "{{ bareos_clients }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - bareos_install_server
+    - item.ansible_delegate_hostname|default(item.name) in ansible_play_hosts
+    - item.state | default('present') == 'absent'

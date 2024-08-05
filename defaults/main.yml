@@ -1,0 +1,154 @@
+---
+
+bareos_release: 21
+bareos_db_package: postgresql-13
+bareos_install_client: false
+bareos_install_server: false
+# Can be dangerous, use with care
+bareos_setup_db: false
+bareos_monitoring_postgres_user: ""
+bareos_monitoring_postgres_pass: password
+bareos_setup_webui_admin_console: false
+bareos_webui_admin_name: admin
+bareos_webui_admin_password: secret
+bareos_director: {}
+  # ip: 10.10.10.2
+  # name: backup.example.com
+bareos_clients: {}
+# Example
+#  - name: ubuntu-1604
+#    ansible_delegate_hostname: ubuntu-1604
+#    address: 192.168.33.10
+#    password: password
+#    jobdefs: DefaultJobLinux
+
+# uncomment for upgrading to specific version
+# bareos_version: "18.2.5-*"
+bareos_default_excludes:
+  - /var/lib/bareos
+  - /var/lib/bareos/storage
+  - /proc
+  - /tmp
+  - /var/tmp
+  - /.journal
+  - /.fsck
+bareos_default_extra_fileset_opts: ""
+
+bareos_apt_monitoring_packages:
+  - python3-psycopg2
+  - python3-pg8000
+  - python3-mysqldb
+  - gpg
+
+bareos_sdd_devices: {}
+
+bareos_schedules:
+  HourlyCycle.conf:
+    # Enabled: yes
+    Name: "HourlyCycle"
+    Run:
+      - "Full 1st sat at 21:00"
+      - "Differential 2nd-5th sat at 21:00"
+      - "Incremental hourly at 0:22"
+    Description: "Standard Schedule with Monthly=Full, Weekly=Diff, Hourly=Inc"
+  every3hCycle.conf:
+    Name: "3hCycle"
+    Description: "Run Job every 3h starting at 0:05"
+    Run:
+      - "Level=Full daily at 0:05"
+      - "Level=Full daily at 3:05"
+      - "Level=Full daily at 6:05"
+      - "Level=Full daily at 9:05"
+      - "Level=Full daily at 12:05"
+      - "Level=Full daily at 15:05"
+      - "Level=Full daily at 18:05"
+      - "Level=Full daily at 21:05"
+  every6hCycle.conf:
+    Name: "6hCycle"
+    Description: "Run Job every 6h starting at 0:05"
+    Run:
+      - "Level=Full daily at 0:05"
+      - "Level=Full daily at 6:05"
+      - "Level=Full daily at 12:05"
+      - "Level=Full daily at 18:05"
+
+bareos_filesets:
+  LinuxAll.conf:
+    Name: LinuxAll
+    Description: "Backup all regular filesystems, determined by filesystem type."
+    Include:
+      Options:
+        Signature: MD5
+        Compression: GZIP
+        One FS: No     # change into other filessytems
+        FS Type:
+          - btrfs
+          - ext2  # filesystems of given types will be backed up
+          - ext3  # others will be ignored
+          - ext4
+          - reiserfs
+          - jfs
+          - xfs
+          - zfs
+      Fileset_opts: ""
+    Excludes:
+      Files:
+        - /var/lib/bareos
+        - /var/lib/bareos/storage
+        - /proc
+        - /tmp
+        - /var/tmp
+        - /.journal
+        - /.fsck
+  WeclappDatabases.conf:
+    Name: "WeclappDatabases"
+    Description: "Backup Weclapp files and user home directories, determined by filesystem type."
+    Include:
+      Options:
+        Signature: MD5
+        Compression: GZIP
+      Files:
+        - "/opt/backups/"
+        - '"\\|bash -c \"find /opt/ -name blobs -type d\""'
+        - "/home"
+        - "/root"
+
+bareos_jobdefs:
+  DefaultJobLinux.conf:
+    Name: "DefaultJobLinux"
+    Type: "Backup"
+    Level: "Incremental"
+    Client: "bareos-fd"
+    FileSet: "LinuxAll"                     # selftest fileset                            (#13)
+    Schedule: "WeeklyCycle"
+    Storage: "File"
+    Messages: "Standard"
+    Pool: "Incremental"
+    Priority: "10"
+    Write Bootstrap: "/var/lib/bareos/%c.bsr"
+    Full Backup Pool: "Full"                  # write Full Backups into "Full" Pool         (#05)
+    Differential Backup Pool: "Differential"  # write Diff Backups into "Differential" Pool (#08)
+    Incremental Backup Pool: "Incremental"    # write Incr Backups into "Incremental" Pool  (#11)
+    Allow Duplicate Jobs: "no"
+    Cancel Lower Level Duplicates: "yes"
+    Cancel Queued Duplicates: "yes"
+  DefaultJob-6h.conf:
+    Accurate: "yes"
+    Name: "DefaultJob-6h"
+    Type: "Backup"
+    Level: "Incremental"
+    FileSet: "WeclappDatabases"                     # selftest fileset                            (#13)
+    Schedule: "6hCycle"
+    Storage: "File"
+    Messages: "Standard"
+    Pool: "Incremental"
+    Priority: "10"
+    Write Bootstrap: "/var/lib/bareos/%c.bsr"
+    Full Backup Pool: "Full"                  # write Full Backups into "Full" Pool         (#05)
+    Differential Backup Pool: "Differential"  # write Diff Backups into "Differential" Pool (#08)
+    Incremental Backup Pool: "Incremental"    # write Incr Backups into "Incremental" Pool  (#11)
+    Allow Duplicate Jobs: "no"
+    Cancel Lower Level Duplicates: "yes"
+    Cancel Queued Duplicates: "yes"
+
+bareos_pools: {}

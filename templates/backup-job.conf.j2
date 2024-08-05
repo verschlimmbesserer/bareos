@@ -1,0 +1,24 @@
+# {{ ansible_managed }}
+{% set extra_config = item.job.config | default({}) %}
+Job {
+  Name = "backup-{{ item.name }}"
+  JobDefs = "{{ item.jobdefs }}"
+  Client = "{{ item.name }}"
+{% for key, value in extra_config.items() %}
+{% if value| type_debug == 'list' %}
+{% for item in value %}
+{% if item | type_debug == 'dict' %}
+  {{ key }} {
+{% for k,v in item.items() %}
+     {{ k }} = {{ v }}
+{% endfor %}
+  }
+{% else %}
+  {{ key }} = {{ item }}
+{% endif %}
+{% endfor %}
+{% else %}
+  {{ key }} = {{ value }}
+{% endif %}
+{% endfor %}
+}

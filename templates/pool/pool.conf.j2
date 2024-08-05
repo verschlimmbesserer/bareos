@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+Pool {
+{% for opt,value in item.value.items() %}
+{% if value | type_debug == "bool" %}
+  {{ opt }} = {{ value | ternary('yes', 'no')}}
+{% else %}
+  {{ opt }} = {{ value }}
+{% endif %}
+{% endfor %}
+}

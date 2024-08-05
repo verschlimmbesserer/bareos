@@ -1,0 +1,40 @@
+# {{ ansible_managed }}
+{% set name = item.value.Name %}
+{% set description = item.value.Description | default("")%}
+{% set options = item.value.Include.Options %}
+{% set fileset_opts = item.value.Include.Fileset_opts | default(bareos_default_extra_fileset_opts) %}
+{% set file_excludes = item.value.Excludes.Files | default(bareos_default_excludes) %}
+{% set files = item.value.Include.Files | default(["/"])%}
+FileSet {
+  Name = "{{ name }}"
+  Description = "{{ description }}"
+  Include {
+    Options {
+{% for opt, val in options.items() %}
+{% if val | type_debug != "list" %}
+      {{ opt }} = {{ val }}
+{% else %}
+{% for item in val %}
+{% if item | type_debug == "bool" %}
+      {{ opt }} = {{ item | ternary('yes', 'no')}}
+{% else %}
+      {{ opt }} = {{ item }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+    }
+{% for file in files %}
+    File = {{ file }}
+{% endfor %}
+    {{ fileset_opts |indent }}
+  }
+  # Things that usually have to be excluded
+  # You have to exclude /var/lib/bareos/storage
+  # on your bareos server
+  Exclude {
+{% for file in file_excludes %}
+    File = {{ file }}
+{% endfor %}
+  }
+}

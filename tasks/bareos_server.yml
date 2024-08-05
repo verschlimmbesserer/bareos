@@ -1,0 +1,188 @@
+---
+- name: Ensure bareos server is installed
+  ansible.builtin.apt:
+    name:
+      - bareos
+      - bareos-webui
+    state: present
+  notify: Restart apache
+
+- name: Ensure bareos postgresql is installed
+  ansible.builtin.apt:
+    name: bareos-database-postgresql
+    state: present
+
+- name: Ensure postgresql is installed
+  ansible.builtin.apt:
+    name: "{{ bareos_db_package }}"
+    state: present
+
+- name: Make sure postgresql is running
+  ansible.builtin.systemd:
+    name: postgresql
+    state: started
+
+- name: Install packages for monitoring
+  ansible.builtin.apt:
+    name: "{{ bareos_apt_monitoring_packages }}"
+    state: present
+
+- name: Setup BareOS DB
+  when: bareos_setup_db
+  block:
+    - name: Check that bareos DB exists
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          psql -lqt | cut -d \| -f 1 | grep -qw bareos
+      become: true
+      become_user: postgres
+      register: _bareos_db_exists
+      failed_when: false
+      changed_when: false
+
+    - name: Run DB setup scripts
+      become: true
+      become_user: postgres
+      ansible.builtin.shell:
+        cmd: >
+          /usr/lib/bareos/scripts/create_bareos_database &&
+          /usr/lib/bareos/scripts/make_bareos_tables &&
+          /usr/lib/bareos/scripts/grant_bareos_privileges
+        executable: /bin/bash
+      register: db_setup_scripts
+      changed_when: db_setup_scripts.rc != 0
+      when: _bareos_db_exists.rc != 0
+
+    - name: Create Postgres Monitoring User
+      become: true
+      become_user: postgres
+      community.general.postgresql_user:
+        name: "{{ bareos_monitoring_postgres_user }}"
+        password: "{{ bareos_monitoring_postgres_pass }}"
+      when: bareos_monitoring_postgres_user is defined and bareos_monitoring_postgres_user | length > 0
+
+    - name: Ensure we have access from the monitoring user
+      become: true
+      become_user: postgres
+      community.general.postgresql_privs:
+        db: bareos
+        role: "{{ bareos_monitoring_postgres_user }}"
+        objs: ALL_IN_SCHEMA
+        privs: SELECT
+      when: bareos_monitoring_postgres_user is defined and bareos_monitoring_postgres_user | length > 0
+
+- name: Get list of configured schedules
+  ansible.builtin.set_fact:
+    schedule_list: "{{ bareos_schedules.keys() | list }}"
+
+- name: Fix weekly schedule to include sunday
+  ansible.builtin.replace:
+    path: /etc/bareos/bareos-dir.d/schedule/WeeklyCycle.conf
+    regexp: 'mon'
+    replace: 'sun'
+  when: not "WeeklyCycle.conf" in schedule_list
+
+- name: Change WeeklyCycleAfterBackup, to backup the Catalog every day
+  ansible.builtin.replace:
+    path: /etc/bareos/bareos-dir.d/schedule/WeeklyCycleAfterBackup.conf
+    regexp: 'mon-fri at 21:10'
+    replace: 'daily at 22:00'
+  when: not "WeeklyCycleAfterBackup.conf" in schedule_list
+
+- name: Configure bareos-sd.d
+  ansible.builtin.template:
+    src: bareos-sd.d/device.conf.j2
+    dest: "/etc/bareos/bareos-sd.d/device/{{ item.key }}"
+    mode: "0640"
+    owner: bareos
+    group: bareos
+  notify: reload bareos server
+  with_items: "{{ bareos_sdd_devices | dict2items }}"
+  when: bareos_sdd_devices is defined and bareos_sdd_devices | length > 0
+
+- name: Upload bareos config files
+  block:
+
+    - name: Upload bareos config pools
+      ansible.builtin.template:
+        src: pool/pool.conf.j2
+        dest: "/etc/bareos/bareos-dir.d/pool/{{ item.key }}"
+        mode: "0640"
+        owner: bareos
+        group: bareos
+      notify: reload bareos server
+      with_items: "{{ bareos_pools | dict2items }}"
+      when: bareos_pools is defined and bareos_pools | length > 0
+
+    - name: Upload bareos config schedules
+      ansible.builtin.template:
+        src: schedule/schedule.conf.j2
+        dest: "/etc/bareos/bareos-dir.d/schedule/{{ item.key }}"
+        mode: "0640"
+        owner: bareos
+        group: bareos
+      notify: reload bareos server
+      with_items: "{{ bareos_schedules | dict2items }}"
+      when: bareos_schedules is defined and bareos_schedules | length > 0
+
+    - name: Upload bareos config filesets
+      ansible.builtin.template:
+        src: fileset/fileset.conf.j2
+        dest: "/etc/bareos/bareos-dir.d/fileset/{{ item.key }}"
+        mode: "0640"
+        owner: bareos
+        group: bareos
+      notify: reload bareos server
+      with_items: "{{ bareos_filesets | dict2items }}"
+      when: bareos_filesets is defined and bareos_filesets | length > 0
+
+    - name: Upload bareos config jobdefs
+      ansible.builtin.template:
+        src: jobdefs/jobdefs.conf.j2
+        dest: "/etc/bareos/bareos-dir.d/jobdefs/{{ item.key }}"
+        mode: "0640"
+        owner: bareos
+        group: bareos
+      notify: reload bareos server
+      with_items: "{{ bareos_jobdefs | dict2items }}"
+      when: bareos_jobdefs is defined and bareos_jobdefs | length > 0
+
+- name: Add webui admin console
+  ansible.builtin.template:
+    src: "admin.conf.j2"
+    dest: /etc/bareos/bareos-dir.d/console/admin.conf
+    mode: "0700"
+    owner: bareos
+    group: bareos
+  notify:
+    - reload bareos server
+    - restart apache
+  when: bareos_setup_webui_admin_console
+
+- name: Make sure daemons are started
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: started
+  with_items:
+    - bareos-dir
+    - bareos-sd
+    - bareos-fd
+    - apache2
+
+- name: Wait for apache to start
+  ansible.builtin.wait_for:
+    port: 80
+    host: 127.0.0.1
+    delay: 5
+    sleep: 5
+    timeout: 60
+
+- name: Upload useful scripts
+  ansible.builtin.copy:
+    src: server/opt/bareos_utils/
+    dest: /opt/bareos_utils/
+    mode: "0700"
+    directory_mode: "0700"
+    owner: root
+    group: root
